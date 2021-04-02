@@ -94,27 +94,52 @@ class IAMAuthInterceptor: AuthInterceptor {
             return nil
         }
         semaphore.wait()
-        let authorization = mutableRequest.allHTTPHeaderFields?[SubscriptionConstants.authorizationkey] ?? ""
-        let securityToken = mutableRequest.allHTTPHeaderFields?[RealtimeProviderConstants.iamSecurityTokenKey] ?? ""
-        let authHeader = IAMAuthenticationHeader(authorization: authorization,
-                                                 host: host,
-                                                 token: securityToken,
-                                                 date: date,
-                                                 accept: RealtimeProviderConstants.iamAccept,
-                                                 contentEncoding: RealtimeProviderConstants.iamEncoding,
-                                                 contentType: RealtimeProviderConstants.iamConentType)
+
+        let authHeader = IAMAuthenticationHeader(host: host, allHeaders: mutableRequest.allHTTPHeaderFields)
         return authHeader
     }
 }
 
 /// Authentication header for IAM based auth
 private class IAMAuthenticationHeader: AuthenticationHeader {
+    private static let AuthorizationHeaderKey = SubscriptionConstants.authorizationkey
+    private static let AcceptHeaderKey = RealtimeProviderConstants.acceptKey
+    private static let ContentEncodingKey = RealtimeProviderConstants.contentEncodingKey
+    private static let ContentTypeKey = RealtimeProviderConstants.contentTypeKey
+    private static let AmzDateKey = RealtimeProviderConstants.amzDate
+    private static let AmzSecurityTokenKey = RealtimeProviderConstants.iamSecurityTokenKey
+
+    private static let LowercasedHeaderKeys: Set = [AuthorizationHeaderKey.lowercased(),
+                                                    AcceptHeaderKey.lowercased(),
+                                                    ContentEncodingKey.lowercased(),
+                                                    ContentTypeKey.lowercased(),
+                                                    AmzDateKey.lowercased(),
+                                                    AmzSecurityTokenKey.lowercased()]
+
     let authorization: String
     let securityToken: String
     let date: String
     let accept: String
     let contentEncoding: String
     let contentType: String
+    let remainingHeaders: [String: String]?
+
+    convenience init(host: String, allHeaders: [String: String]?) {
+        let authorization = allHeaders?[SubscriptionConstants.authorizationkey] ?? ""
+        let securityToken = allHeaders?[RealtimeProviderConstants.iamSecurityTokenKey] ?? ""
+        let date = allHeaders?[RealtimeProviderConstants.amzDate] ?? ""
+        let remainingHeaders = allHeaders?.filter { (header) -> Bool in
+            return !Self.LowercasedHeaderKeys.contains(header.key.lowercased())
+        }
+        self.init(authorization: authorization,
+                  host: host,
+                  token: securityToken,
+                  date: date,
+                  accept: RealtimeProviderConstants.iamAccept,
+                  contentEncoding: RealtimeProviderConstants.iamEncoding,
+                  contentType: RealtimeProviderConstants.iamConentType,
+                  remainingHeaders: remainingHeaders)
+    }
 
     init(authorization: String,
          host: String,
@@ -122,33 +147,50 @@ private class IAMAuthenticationHeader: AuthenticationHeader {
          date: String,
          accept: String,
          contentEncoding: String,
-         contentType: String) {
+         contentType: String,
+         remainingHeaders: [String: String]?) {
         self.date = date
         self.authorization = authorization
         self.securityToken = token
         self.accept = accept
         self.contentEncoding = contentEncoding
         self.contentType = contentType
+        self.remainingHeaders = remainingHeaders
         super.init(host: host)
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case authorization = "Authorization"
-        case accept
-        case contentEncoding = "content-encoding"
-        case contentType = "content-type"
-        case date = "x-amz-date"
-        case securityToken = "x-amz-security-token"
+
+    private struct DynamicCodingKeys: CodingKey {
+        var stringValue: String
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+        var intValue: Int?
+        init?(intValue: Int) {
+            return nil
+        }
     }
 
     override func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authorization, forKey: .authorization)
-        try container.encode(accept, forKey: .accept)
-        try container.encode(contentEncoding, forKey: .contentEncoding)
-        try container.encode(contentType, forKey: .contentType)
-        try container.encode(date, forKey: .date)
-        try container.encode(securityToken, forKey: .securityToken)
+        var container = encoder.container(keyedBy: DynamicCodingKeys.self)
+        try container.encode(authorization,
+                             forKey: DynamicCodingKeys(stringValue: IAMAuthenticationHeader.AuthorizationHeaderKey)!)
+        try container.encode(accept,
+                             forKey: DynamicCodingKeys(stringValue: IAMAuthenticationHeader.AcceptHeaderKey)!)
+        try container.encode(contentEncoding,
+                             forKey: DynamicCodingKeys(stringValue: IAMAuthenticationHeader.ContentEncodingKey)!)
+        try container.encode(contentType,
+                             forKey: DynamicCodingKeys(stringValue: IAMAuthenticationHeader.ContentTypeKey)!)
+        try container.encode(date,
+                             forKey: DynamicCodingKeys(stringValue: IAMAuthenticationHeader.AmzDateKey)!)
+        try container.encode(securityToken,
+                             forKey: DynamicCodingKeys(stringValue: IAMAuthenticationHeader.AmzSecurityTokenKey)!)
+        if let headers = remainingHeaders {
+            for (key, value) in headers {
+                try container.encode(value, forKey: DynamicCodingKeys(stringValue: key)!)
+            }
+
+        }
         try super.encode(to: encoder)
     }
 }
